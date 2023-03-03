@@ -1,0 +1,1777 @@
+---
+title: "Collectively Classical - Manuscript Results"
+author: "Dana Swarbrick"
+date: "01/03/2023"
+output: 
+  html_document: 
+    toc: true
+  pdf_document: default
+---
+# File description
+This notebook accompanies the results presented in the Collectively Classical manuscript.
+
+
+# Load Data
+```{r}
+df.full<-readRDS(file = "../output/Prepared_Data.Rda")
+
+# rename ParticipantCode to Pt_ID because that is the name I began by using here.
+names(df.full)[1]<-"Pt_ID"
+```
+
+Pt_ID has several codes that give different meaning. 
+
+- Position 1 Attendance condition:
+    A: Participant attended concert in the hall in Copenhagen
+    B: Participant attended concert via livestream
+
+- Position 2 Questionnaire language condition:
+    D: The participant answered questions in the Danish language version of the questionnaire
+    E: The participant answered questions in the English language version of the questionnaire
+    n: No questionnaire responses are available for this participant
+    X: No questionnaire data by request
+
+- Position 3 Motion quality condition:
+    Q: Motion recorded via the MusicLab app and time series has been synced to concert time via at least one synchronization cue tap sequence.
+    R: Motion recorded via AX3 sensor (hall only) and has been adjusted via either recorded synchronization tap sequence or estimated offset based on sensors initiated at the same time. 
+    S: Motion recorded via the MusicLab app but the time series has not been synced because there were no viable synchronization cues recorded in the series.
+    T: Motion recorded via AX3 sensor but the time series has not been synced because there were no viable synchronization cues recorded in the series. 
+    U: No recorded motion is available for this participant
+    V: Only a small amount of motion was recorded via MusicLab app, but it was during a sync cue. These files were excluded from publication but retained as records for tapping sync analysis. 
+
+- The participant numbers were assigned uniquely by sorting the participants according a sequence of criteria:
+    0. All DeviceID, ascending (Fixed effectively random order)
+    1. Questionnaire response completeness (descending)
+    2. Motion quality condition
+    3. Questionnaire language condition
+    4. Attendance condition
+    5. Exclusions
+
+# Import Libraries
+
+```{r libraries}
+packages = c("GPArotation","rmcorr", "cowplot", "ggpubr", "rstatix", "ltm","reshape2", "tidyverse", "psych", "nlme", "emmeans", "pastecs", "ordinal", "ggsignif", "ARTool", "multcomp", "easystats", "merDeriv", "ggeffects", "magrittr", "brms", "rstan", "StanHeaders", "lme4", "lmerTest") 
+
+## Now load or install&load all
+package.check <- lapply(
+  packages,
+  FUN = function(x) {
+    if (!require(x, character.only = TRUE)) {
+      install.packages(x, dependencies = TRUE)
+      library(x, character.only = TRUE)
+    }
+  }
+)
+
+source("useful_functions.R")
+```
+
+# 3.1 Participants
+## Describe the sample
+
+```{r}
+#n 
+df.full%>%group_by(group)%>%count()
+
+#gender
+df.full%>%group_by(group,gender)%>%summarise(count = n())
+
+#age
+df.full%>%group_by(group)%>%summarise(mean = mean(age, na.rm = TRUE), sd = sd(age, na.rm = TRUE))
+
+# language
+df.full%>%group_by(group, language)%>%summarise(count = n())
+
+#musician status
+test<-df.full%>%group_by(group,musician_status)%>%summarise(count = n())
+test2<-pivot_wider(test, names_from = group, values_from = count )
+write.table(test2, file = "musician_status.txt", sep = ",", quote = FALSE, row.names = F)
+
+# Personal Relation
+df.full%>%group_by(group, personal_relation)%>%summarise(count = n())
+
+# Fan-status
+df.full%>%group_by(group)%>%summarise(mean = mean(fan, na.rm = TRUE), sd = sd(fan, na.rm = TRUE))
+
+# Empathic Concern
+df.full%>%group_by(group)%>%summarise(mean = mean(EC, na.rm = TRUE), sd = sd(EC, na.rm = TRUE))
+
+# AIMS
+df.full%>%select(Pt_ID, group, AIMS)%>%filter(!is.na(AIMS))%>%filter(group == "Virtual") # 14 participants: NA (All virtual); 31 participants in the virtual audience did respond on the aims scale.
+df.full%>%summarise(mean = mean(AIMS, na.rm = TRUE),median = median(AIMS, na.rm = TRUE), sd = sd(AIMS, na.rm = TRUE), min = min(AIMS, na.rm = TRUE), max = max(AIMS, na.rm = TRUE)) # overall measure is very similar to that reported in Sandstrom and Russo (M = 113.5, SD = 23.8, Range = [46-164]) 
+df.full%>%group_by(group)%>%summarise(mean = mean(AIMS, na.rm = TRUE),median = median(AIMS,  na.rm = TRUE), sd = sd(AIMS, na.rm = TRUE))
+
+# How much movement data was there?
+df.full%>%select(Pt_ID, group, contains("mQoM"))%>%pivot_longer(!c(Pt_ID,group),
+                        names_to = "piece",
+                        names_pattern ="_(.*)",
+                        values_to = "mQoM")%>%drop_na%>%group_by(group, piece)%>%summarise(count = n())
+
+### Group size
+#How many people were in each group?
+
+df.full%>%group_by(group, group_size)%>%summarise(count = n())
+df.full%>%group_by(group)%>%summarise(mean = mean(group_size, na.rm = TRUE),
+                                      SD = SD(group_size, na.rm = TRUE))
+```
+
+## Check for differences between groups (age and musician status?)
+
+### Age: Two-sample t-test
+
+```{r}
+t.test(df.full$age~df.full$group)
+```
+
+### Musician status (ordinal) Kruskal Wallis test
+The Kruskal Wallis test is used when you have one independent variable with two or more levels and an ordinal dependent variable.
+
+```{r}
+ggplot(df.full, aes(x = musician_status))+geom_bar()+facet_grid(cols = vars(group)) # these distributions don't really look the same :/
+
+kruskal.test(musician_status~group, data = df.full)
+```
+
+### Language (Chi-square)
+Were there more Danish in the live audience than the livestreaming and more English in the livestream?
+
+```{r}
+table(df.full$group, df.full$language)
+chisq.test(df.full$group, df.full$language)
+```
+
+### Watching alone (Chi-square)
+How many people were watching alone per group?
+
+```{r}
+df.full%>%group_by(group, Watch_Alone)%>%summarise(count = n())
+chisq.test(df.full$group, df.full$Watch_Alone)
+```
+
+### Fan-status (ordinal) Kruskal Wallis test
+```{r}
+ggplot(df.full, aes(x = fan))+geom_bar()+facet_grid(cols = vars(group)) # these distributions don't look the same therefore conduct non-parametric test
+
+kruskal.test(fan~group, data = df.full)
+```
+
+### AIMS
+```{r}
+AIMS_dat<-df.full%>%select(group,contains("AIMS"))
+#could also test with syntax:
+t.test(df.full$AIMS~df.full$group)
+```
+
+### Empathic concern
+
+```{r}
+EC_dat<-df.full%>%select(group,contains("EC"))%>%select(-contains("connected"),-contains("aware"))
+t.test(df.full$EC~df.full$group)
+
+# the t-test assumes a normal distribution and equal variances from both groups. Is that assumption met for this data?
+EC_dat%>%
+  ggplot(aes(EC))+
+  geom_histogram()+
+  facet_grid(vars(group))
+
+# maybe it is not satisfying assumptions? 
+live_EC<-df.full%>%filter(group == "Live")%>%select(EC)%>%na.omit()
+virtual_EC<-df.full%>%filter(group == "Virtual")%>%select(EC)%>%na.omit()
+
+# still significant with non-parametric version
+wilcox.test(live_EC$EC, virtual_EC$EC, alternative = "two.sided")
+```
+
+### Countries (Virtual) 
+How many countries did the livestreaming audience view from?
+
+The livestreaming audience consisted of participants from 16 countries mostly from Europe (Denmark: n = 5, Norway: n = 5, Russia: n = 3, Sweden: n = 2, Austria: n = 2, Germany: n = 2, Romania: n = 2, France: n = 1, Hungary: n = 1, Netherlands: n = 1, Portugal, n = 1, Switzerland: n = 1, UK: n = 1) and the Americas (USA: n = 5, Canada: n = 2, Ecuador: n = 1).
+
+```{r}
+country_Count<-df.full%>%filter(group == "Virtual")%>%group_by(country)%>%summarise(n())
+
+country_Count
+```
+
+# 3.2 Scale Reliability
+Check internal reliability with omega.
+
+## Kama Muta
+The kama muta scale demonstrated good reliability with high omega values for each piece (Beethoven: .92, Schnittke: .90, Folk: .92, overall: .91). 
+
+```{r}
+df_KM<-df.full%>%
+  select(Pt_ID, tears_Beethoven:positive_Beethoven, moved_Beethoven:touched_Beethoven, KM_Beethoven, tears_Schnittke:positive_Schnittke, moved_Schnittke:touched_Schnittke,
+         KM_Schnittke, tears_Folk:positive_Folk, moved_Folk:touched_Folk, KM_Folk)
+
+df_KM.long<-df_KM%>%pivot_longer(!Pt_ID,
+                        names_to = c("question", "piece"),
+                        names_pattern ="(.*)_(.*)",
+                        values_to = "response")
+
+df_KM.wide<-df_KM.long%>%pivot_wider(names_from = question, values_from = response)
+```
+
+```{r}
+df_kamamuta<-df_KM.wide%>%select(-Pt_ID, -piece)
+lowerCor(df_kamamuta)
+df_kamamuta_items<-df_kamamuta%>%select(-KM) #remove the avg of the items.
+omega(df_kamamuta_items) 
+```
+
+### Piece-wise
+Beethoven: .92, Schnittke: .90, Folk: .92
+
+```{r}
+# Beethoven
+KM_Beethoven<-df.full%>%
+  select(tears_Beethoven:positive_Beethoven, moved_Beethoven:touched_Beethoven)
+
+print(summary(psych::alpha(KM_Beethoven))$raw_alpha)
+omega(KM_Beethoven)
+
+# Schnittke
+KM_Schnittke<-df.full%>%
+  select(tears_Schnittke:positive_Schnittke, moved_Schnittke:touched_Schnittke)
+
+print(summary(psych::alpha(KM_Schnittke))$raw_alpha)
+omega(KM_Schnittke)  
+
+# Folk
+KM_Folk<-df.full%>%
+  select(tears_Folk:positive_Folk, moved_Folk:touched_Folk)
+
+print(summary(psych::alpha(KM_Folk))$raw_alpha)
+omega(KM_Folk)
+```
+
+## Awe
+The awe scale also demonstrated good internal consistency with high omega values (Beethoven: .82, Schnittke: .88, Folk: .78, overall: .88). Including the item of “I was filled with admiration and wonder” adapted from the Aesthetic Experience Scale did not change the values of omega so we included it in the measure of awe (Beethoven: .86, Schnittke: .88, Folk: .90, Overall:.88). 
+
+```{r}
+awe_items<-c("presence_grand", "greater_than_myself", "jaw_drop", "gasped", "challenge_process", "hard_comprehend")
+
+df_awe<-df.full%>%select(Pt_ID, contains(awe_items))
+
+df_awe.long<-df_awe%>%pivot_longer(!Pt_ID,
+                        names_to = c("question", "piece"),
+                        names_pattern ="(.*)_(.*)",
+                        values_to = "response")
+
+df_awe.wide<-df_awe.long%>%pivot_wider(names_from = question, values_from = response)
+```
+
+But this is maybe not accurate because it makes sense it would be higher when here are repeated measures. Therefore, check the piece-wise values.
+
+```{r}
+df_Aw<-df_awe.wide%>%select(-Pt_ID, -piece)
+lowerCor(df_Aw)
+omega(df_Aw)
+```
+
+###Piece-wise
+
+```{r}
+#Beethoven
+AWE_B<-df.full%>%
+  select(Pt_ID, contains("Beethoven"))%>%
+  select(Pt_ID, contains(c("presence_grand", "greater_than_myself", "jaw_drop", "gasped", "challenge_process", "hard_comprehend")))
+AWE<-AWE_B%>%select(-Pt_ID)
+
+print(summary(psych::alpha(AWE))$raw_alpha)
+omega(AWE)
+
+#Schnittke
+AWE_S<-df.full%>%
+  select(Pt_ID, contains("Schnittke"))%>%
+  select(Pt_ID, contains(c("presence_grand", "greater_than_myself", "jaw_drop", "gasped", "challenge_process", "hard_comprehend")))
+AWE<-AWE_S%>%select(-Pt_ID)
+
+print(summary(psych::alpha(AWE))$raw_alpha)
+omega(AWE)
+
+#Folk
+AWE_F<-df.full%>%
+  select(Pt_ID, contains("Folk"))%>%
+  select(Pt_ID, contains(c("presence_grand", "greater_than_myself", "jaw_drop", "gasped", "challenge_process", "hard_comprehend")))
+AWE<-AWE_F%>%select(-Pt_ID)
+
+print(summary(psych::alpha(AWE))$raw_alpha)
+omega(AWE)
+```
+
+### Admiration and Wonder
+
+```{r}
+awe_items<-c("presence_grand", "greater_than_myself", "jaw_drop", "gasped", "challenge_process", "hard_comprehend", "admiration")
+
+df_awe<-df.full%>%select(Pt_ID, contains(awe_items))
+
+df_awe.long<-df_awe%>%pivot_longer(!Pt_ID,
+                        names_to = c("question", "piece"),
+                        names_pattern ="(.*)_(.*)",
+                        values_to = "response")
+
+df_awe.wide<-df_awe.long%>%pivot_wider(names_from = question, values_from = response)
+```
+
+But this is maybe not accurate because it makes sense it would be higher when there are repeated measures. Therefore, check the piece-wise values.
+
+```{r}
+df_Aw<-df_awe.wide%>%select(-Pt_ID, -piece)
+lowerCor(df_Aw)
+omega(df_Aw)
+```
+
+#### Piece-wise
+
+```{r}
+#Beethoven
+# Adjust the AWE response scale to 0-6 by subtracting 1 from every response
+AWE_adjusted<-AWE_B[2:7]-1
+AWE_adj<-cbind(AWE_B$Pt_ID, AWE_adjusted)
+colnames(AWE_adj)[1]<-"Pt_ID"
+
+# Add the admiration and wonder item to the dataframe
+wonder<-df.full%>%select(Pt_ID, admiration_Beethoven) 
+AWE_wonder<-full_join(AWE_adj, wonder, by = "Pt_ID")
+
+AWE_adj<-AWE_adj%>%select(-Pt_ID)
+AWE_wonder<-AWE_wonder%>%select(-Pt_ID)
+print(summary(psych::alpha(AWE_adj))$raw_alpha) # alpha = .66
+print(summary(psych::alpha(AWE_wonder))$raw_alpha) # alpha = .72
+
+omega(AWE_adj) #omega = .82
+omega(AWE_wonder) #omega = .86 (but ruined the factor structure)
+
+#Schnittke
+# Adjust the AWE response scale to 0-6 by subtracting 1 from every response
+AWE_adjusted<-AWE_S[2:7]-1
+AWE_adj<-cbind(AWE_S$Pt_ID, AWE_adjusted)
+colnames(AWE_adj)[1]<-"Pt_ID"
+
+# Add the admiration and wonder item to the dataframe
+wonder<-df.full%>%select(Pt_ID, admiration_Schnittke) 
+AWE_wonder<-full_join(AWE_adj, wonder, by = "Pt_ID")
+
+AWE_adj<-AWE_adj%>%select(-Pt_ID)
+AWE_wonder<-AWE_wonder%>%select(-Pt_ID)
+print(summary(psych::alpha(AWE_adj))$raw_alpha) # alpha = .72
+print(summary(psych::alpha(AWE_wonder))$raw_alpha) # alpha = .75
+
+omega(AWE_adj) #omega = .88
+omega(AWE_wonder) #omega = .88 (admiration was added to the factor of grandness)
+
+#Folk
+# Adjust the AWE response scale to 0-6 by subtracting 1 from every response
+AWE_adjusted<-AWE_F[2:7]-1
+AWE_adj<-cbind(AWE_F$Pt_ID, AWE_adjusted)
+colnames(AWE_adj)[1]<-"Pt_ID"
+
+# Add the admiration and wonder item to the dataframe
+wonder<-df.full%>%select(Pt_ID, admiration_Folk) 
+AWE_wonder<-full_join(AWE_adj, wonder, by = "Pt_ID")
+
+AWE_adj<-AWE_adj%>%select(-Pt_ID)
+AWE_wonder<-AWE_wonder%>%select(-Pt_ID)
+print(summary(psych::alpha(AWE_adj))$raw_alpha) # alpha = .79
+print(summary(psych::alpha(AWE_wonder))$raw_alpha) # alpha = .81
+
+omega(AWE_adj) #omega = .9
+omega(AWE_wonder) #omega = .9 (admiration was added to the grandness factor)
+```
+
+## Missing values
+To avoid losing participants with missing values, consider imputing values to the median. 
+There was one live participant who did not report their fan-status therefore they were imputed to the median. 
+
+```{r}
+df.full$fan[df.full$group == "Live" &is.na(df.full$fan)]<-median(df.full$fan, na.rm = TRUE)
+df.full$fan
+```
+
+AIMS is the only variable that we may want to include in the models that is potentially missing while all the others are there because it was collected in the post-concert survey while the others were collected in the pre-concert survey.
+
+```{r}
+personal_chars<-df.full%>%select(Pt_ID, fan, EC, AIMS, musician_status, Watch_Alone, personal_relation, contains("connected"))
+personal_chars_w_na = personal_chars[!complete.cases(personal_chars), ]
+pts_to_impute<-personal_chars_w_na%>%filter(is.na(AIMS))%>%filter(!is.na(connected_musicians_Beethoven)|!is.na(connected_musicians_Schnittke)| !is.na(connected_musicians_Folk)|!is.na(connected_audience_Beethoven)|!is.na(connected_audience_Schnittke)|!is.na(connected_audience_attending_Folk))%>%filter(!is.na(personal_relation)) # but having at least one connectedness value
+# there are 10 cases where AIMS is missing but they have the other values & at least one report of connectedness
+
+median_aims<-median(df.full$AIMS, na.rm = TRUE)
+median_fan<-median(df.full$fan, na.rm = TRUE)
+
+df.full$AIMS[df.full$Pt_ID %in% pts_to_impute$Pt_ID]<-median_aims
+
+# check that it worked = yes!
+df.full%>%filter(Pt_ID %in% pts_to_impute$Pt_ID)%>%select(AIMS)
+
+pts_to_impute%>%select(Pt_ID, fan, AIMS)
+#there is one case where they have the other values but not AIMS and fan (Pt_ID = BEU130). Therefore I propose filling in AIMS and fan-status for that one person. 
+
+df.full$fan[df.full$Pt_ID == "BEU130"]<-median_fan
+```
+
+Combine group size and watch alone by assigning virtual participants who said they did not watch alone a value of 2. 
+```{r}
+#group_size is NA for livestreaming Ps
+df.full$group_size[df.full$Watch_Alone==1 & df.full$group =="Virtual"]<-1
+df.full$group_size[df.full$Watch_Alone==0 & df.full$group =="Virtual"]<-2
+
+# check that this worked correctly
+df.full%>%select(Pt_ID, Watch_Alone,viewing_with_others, group_size)
+```
+
+
+# 3.3 Effect of Concert and Individual Characteristics on Emotions
+
+
+## 3.3.1 Social Connectedness
+
+### Audience attending vs. streaming
+Check for difference between virtual audience connectedness towards the livestreaming versus the physically present audience.
+
+First check whether there is a significant difference between reports of connectedness towards the physically present audience and the streaming audience. 
+
+IV: question (group directed connectedness - categorical - physically present versus streaming) DV: Connectedness value (ordinal).
+Test: Kruskal Wallis test
+
+#### Visualize 
+...and examine means
+```{r}
+virtual_connectedness<-df.full%>%select(Pt_ID, group, contains(c("connected_audience_streaming", "connected_audience_attending")))%>%filter(group == "Virtual")
+
+
+virtual_connectedness.long<-virtual_connectedness%>%pivot_longer(!c(group, Pt_ID), #make long
+                        names_to = c("question", "piece"),
+                        names_pattern ="(.*)_(.*)",
+                        values_to = "response")
+
+virtual_connectedness.long$question<-factor(virtual_connectedness.long$question, levels = c("connected_audience_attending", "connected_audience_streaming"), labels = c("Attending", "Streaming"))
+
+#average connectedness audience attending
+virtual_connectedness.long%>%group_by(group, question)%>%summarise(mean = mean(response, na.rm = TRUE), sd = sd(response, na.rm = TRUE))
+
+# factor order
+virtual_connectedness.long$piece<-factor(virtual_connectedness.long$piece, levels = c("Beethoven", "Schnittke", "Folk"))
+
+virtual_connectedness.long%>%drop_na()%>%ggplot(aes(response))+
+  geom_histogram()+facet_wrap(~question)+
+  theme_minimal()+
+  labs(title = "Raw Data: Virtual Connectedness", y = "Count", x = "Connectedness Response")
+
+virtual_connectedness.long%>%drop_na()%>%ggplot(aes(y = response, x = question))+
+  geom_boxplot()+facet_wrap(~piece)+
+  theme_minimal()+
+  labs(title = "Virtual Connectedness", y = "Response", x = "Connectedness Group")
+```
+Based on the means it looks like the evaluations of connectedness were very similar, with the streaming group receiving very slightly greater assessments of connectedness than the attending audience. 
+
+To assess if there was a trend in the direction of the effect, we can also try plotting a line graph that would let us see this (similar to the comparison between moved and touched)
+
+#### Visualize individuals
+... differences in reports of connectedness towards the streaming and attending audience
+
+There don't seem to be any consistent differences with some people reporting more, some less, and some the same connectedness to each group.
+```{r}
+virtual_connectedness.long$piece<-factor(virtual_connectedness.long$piece, levels = c("Beethoven", "Schnittke", "Folk"))
+
+virtual_connectedness.long%>%
+  ggplot(aes(color = Pt_ID,x = question, y = response, group = Pt_ID))+
+  geom_line(alpha = 0.5)+ # in this way the darkness oft he line indicates the number of overlaping lines
+  labs(title="Connectedness to attending and streaming audiences")+
+  theme_bw()+
+  xlab("Piece")+
+  ylab("Response")+
+  theme(axis.text.x = element_text(angle = 30))+
+  theme(plot.title = element_text(size = 18))+
+  theme(legend.position = "none")+
+  facet_grid(~piece)+
+  theme(strip.text.x = element_text(size = 12), strip.text.y = element_text(size = 12))
+```
+
+#### Test 
+... for differences between livestreaming participants SC towards live and livestreaming audiences
+
+There are no significant differences between reports of connectedness towards the physically attending and streaming audiences. Therefore it is reasonable to use either as an outcome variable. To keep it consistent across groups, the connectedness to the physically attending audience can be used. You need to check if the results are the same for the other connectedness group as well
+```{r}
+# all data
+all_data = kruskal.test(response ~ question, 
+             data = virtual_connectedness.long)
+
+print(all_data)
+
+# beethoven
+beeth_conn_virt<-virtual_connectedness.long%>%filter(piece == "Beethoven")
+beethoven = kruskal.test(response ~ question, 
+             data = beeth_conn_virt)
+
+print(beethoven)
+
+# schnittke
+schnit_conn_virt<-virtual_connectedness.long%>%filter(piece == "Schnittke")
+schnittke = kruskal.test(response ~ question, 
+             data = schnit_conn_virt)
+
+print(schnittke)
+
+# folk
+folk_conn_virt<-virtual_connectedness.long%>%filter(piece == "Folk")
+folk = kruskal.test(response ~ question, 
+             data = folk_conn_virt)
+
+print(folk)
+```
+
+
+#### Organize data
+```{r}
+dat<-df.full%>%select(Pt_ID, group, contains("connected"))
+
+# select the connected_musicians and connected_audience_attending
+virt.dat<-dat%>%filter(group == "Virtual")%>%select(Pt_ID, group, contains("connected_musicians"), contains("connected_audience_streaming")) # contains("connected_audience_attending"))
+colnames(virt.dat)
+
+live.dat<-dat%>%filter(group == "Live")%>%select(Pt_ID, group, contains("connected_musicians"), connected_audience_Beethoven, connected_audience_Schnittke, connected_audience_Folk)
+colnames(live.dat)
+
+colnames(virt.dat)<-colnames(live.dat)
+
+df<-bind_rows(live.dat, virt.dat)
+
+df.long<-df%>%pivot_longer(!c(group, Pt_ID), #make long
+                        names_to = c("question", "piece"),
+                        names_pattern ="(.*)_(.*)",
+                        values_to = "response")
+
+df.long$piece<-factor(df.long$piece, levels = c("Beethoven", "Schnittke", "Folk")) #factor for the correct facet order
+
+data<-df.long%>%drop_na() # removed NA so 816 observations became 726 observations
+
+# data<-data%>%mutate_all(factor) 
+data$question<-as.factor(data$question)
+data$Pt_ID<-as.factor(data$Pt_ID)
+data$response.f<-factor(data$response, ordered = TRUE)
+```
+
+```{r}
+personal_chars<-df.full%>%select(Pt_ID, fan, EC, AIMS, musician_status, group_size, personal_relation)
+
+data_indchar<-data%>%left_join(personal_chars, by = "Pt_ID")
+
+data_indchar_w_na = data_indchar[!complete.cases(data_indchar), ]
+
+data_indchar_w_na%>%group_by(Pt_ID)%>%summarise(count = n()) # 10 participants being dropped all virtual
+
+data_indchar%<>%drop_na()
+# data --> data_indchar: 726 obs --> 680
+
+data_indchar$Pt_ID<-factor(data_indchar$Pt_ID)
+data_indchar$mus_stat_num = as.numeric(data_indchar$musician_status)
+
+# check sample size
+data_indchar%>%group_by(group, question,piece)%>%count()
+
+check_outliers(data_indchar$response)
+```
+
+```{r}
+plot_conn_mus<-data_indchar%>%filter(question == "connected_musicians")
+plot_conn_aud<-data_indchar%>%filter(question == "connected_audience")
+hist(plot_conn_mus$response)
+hist(plot_conn_aud$response)
+```
+### Bayesian Multilevel Ordinal Regression
+
+*Standardize data*
+
+"Performs a standardization of data (z-scoring), i.e., centering and scaling, so that the data is expressed in terms of standard deviation (i.e., mean = 0, SD = 1)"
+"When applied to a statistical model, this function extracts the dataset, standardizes it, and refits the model with this standardized version of the dataset. "
+
+https://easystats.github.io/datawizard/reference/standardize.html
+```{r}
+std_sc_data<-standardize(data_indchar)
+```
+
+Get prior
+```{r}
+get_prior(bf(response.f ~ 
+                  piece + question + group + question:group + # concert chars
+                  # relational chars
+                  fan + fan:question +  personal_relation + personal_relation:question + group_size + group_size:question +
+                  # individual chars
+                  EC + AIMS + mus_stat_num + 
+                  (1|Pt_ID)),
+          data = std_sc_data)
+```
+
+Fit model on standardized data
+```{r}
+# social connection 
+std_sc_full_brm_priorN01<-brm(
+  bf(response.f ~ # concert chars
+                  piece + question + group + question:group + 
+                  # relational chars
+                  fan + fan:question +  personal_relation + personal_relation:question + group_size + group_size:question +
+                  # individual chars
+                  EC + AIMS + mus_stat_num + 
+                  (1|Pt_ID)), 
+  family = cumulative("probit"), 
+  data = std_sc_data, 
+  init = "0", 
+  prior = set_prior("normal(0, 1)", 
+                    coef = c("pieceSchnittke",
+                             "pieceFolk", 
+                             "questionconnected_musicians", 
+                             "groupVirtual", 
+                             "fan", 
+                             "personal_relationRelative_Friend",
+                             "questionconnected_musicians:personal_relationRelative_Friend",
+                             "group_size",
+                             "questionconnected_musicians:group_size",
+                             "EC", 
+                             "AIMS",
+                             "mus_stat_num",
+                             "questionconnected_musicians:groupVirtual", 
+                             "questionconnected_musicians:fan")),
+  chains = 6, # does this improve ESS?
+  save_pars = save_pars(all = TRUE))
+```
+
+```{r}
+# save
+save(std_sc_full_brm_priorN01, file = "standardized_connectedness_brm.rda")
+```
+
+Summary
+```{r}
+summary(std_sc_full_brm_priorN01)
+```
+
+#### Model diagnostics
+Help with interpretation can be found here: https://easystats.github.io/bayestestR/reference/check_prior.html
+
+```{r}
+check_prior(std_sc_full_brm_priorN01, method = "gelman")
+
+diagnostic_posterior(std_sc_full_brm_priorN01) 
+# Good:  Rhat values are near 1 but not surpassing 1.1
+# Good:  ESS values are all over 1000 
+```
+
+#### Describe Posterior
+```{r}
+std_sc_posterior_ciHDI<-describe_posterior(
+  std_sc_full_brm_priorN01,
+  component = "all",
+  test = c("p_direction", "p_significance", "rope"),
+  centrality = "all",
+  ci_method = "HDI",
+  ci = .95
+)
+std_sc_posterior_ciHDI
+```
+
+"However, simulation studies data suggest that using the percentage of the full posterior distribution, instead of a CI, might be more sensitive (especially do delineate highly significant effects). Thus, we recommend that the user considers using the full ROPE percentage (by setting ci = 1), which will return the portion of the entire posterior distribution in the ROPE."
+
+```{r}
+percentage_in_rope <- rope(std_sc_full_brm_priorN01, ci = 1, data = std_sc_data)
+percentage_in_rope
+
+p_in_rope<-percentage_in_rope
+
+round(p_in_rope$ROPE_Percentage, 3)
+
+p_in_rope%<>%mutate(outside_rope = 1- ROPE_Percentage)
+
+# retrieve percent
+library(scales)
+p_in_rope$outside_rope_percent<-lapply(p_in_rope$outside_rope, label_percent(accuracy = 0.1))
+
+plot(percentage_in_rope)
+```
+SEXIT
+```{r}
+std_sexit<-sexit(std_sc_full_brm_priorN01, significant = "default", large = "default", ci = .95) # significant default is .05 SD of outcome and .3 SD of outome
+std_sexit
+```
+
+Probability of direction
+```{r}
+pd<-p_direction(std_sc_full_brm_priorN01)
+pd
+plot(pd)
+```
+
+#### Estimate effects
+
+Warning: brms' emmeans support for ordinal models is experimental and currently ignores the threshold parameters.Warning: brms' emmeans support for ordinal models is experimental and currently ignores the threshold parameters.
+```{r}
+contr_piece<-estimate_contrasts(std_sc_full_brm_priorN01, contrast = "piece")
+contr_groupXquestion<-estimate_contrasts(std_sc_full_brm_priorN01, contrast = "group", at = "question")
+contr_questionXgroup<-estimate_contrasts(std_sc_full_brm_priorN01, contrast = "question", at = "group")
+slope_fan<-estimate_slopes(std_sc_full_brm_priorN01, trend = "fan", at = "question")
+
+contr_piece
+contr_groupXquestion
+contr_questionXgroup
+slope_fan
+```
+
+#### Visualize
+```{r}
+SC_params<-parameters(std_sc_full_brm_priorN01)
+SC_params
+
+labels = c( "Target[Musicians]:Group Size", "Target[Musicians]:Relationship", "*Target[Musicians]:Fanship", "*Target[Musicians]:Group[Livestream]", "Musical Proficiency",  "Trait Absorption","Trait Empathy","Group Size","*Relationship Musicians", "Fanship","*Group [Livestreaming]", "*Target [Musicians]","*Piece [Folk]",  "*Piece [Schnittke]")
+
+colours_DSQ<-c("#2d769a","#b34036")
+
+#SC_param_plot<-
+plot(SC_params) +
+  scale_y_discrete(labels = labels)+
+  scale_color_manual(values = rev(colours_DSQ))+
+  labs(title = "Connectedness")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+graphname<-paste0("../plots/dot_whisker_sc.jpg")
+
+ggsave(graphname, width = 15, height = 10, units = 'cm', dpi = 500)
+```
+
+## 3.3.2 Kama Muta
+Organize data
+```{r}
+dat<-df.full%>%select(Pt_ID, group, contains("KM"))
+
+df.long<-dat%>%pivot_longer(!c(group, Pt_ID), #make long
+                        names_to = "piece",
+                        names_pattern ="_(.*)",
+                        values_to = "KM")
+
+df.long$piece<-factor(df.long$piece, levels = c("Beethoven", "Schnittke", "Folk")) #factor for the correct facet order
+df.long_w_na = df.long[!complete.cases(df.long), ]
+
+data<-df.long%>%drop_na() # removed NA so 408 observations became 377 observations. removing some livestreaming participants who didnt fill out KM
+
+personal_chars<-df.full%>%select(Pt_ID, fan, EC, AIMS, musician_status, group_size, personal_relation)
+KM_indchar<-data%>%left_join(personal_chars, by = "Pt_ID")
+
+KM_indchar_w_na = KM_indchar[!complete.cases(KM_indchar), ]
+
+KM_indchar<-KM_indchar%>%drop_na() #377 to 339
+
+KM_indchar$Pt_ID<-factor(KM_indchar$Pt_ID)
+KM_indchar$mus_stat_num = as.numeric(KM_indchar$musician_status)
+
+KM_indchar%>%group_by(group, piece)%>%count()
+```
+
+Fit lme4 with all predictors
+```{r}
+KM_full<-lmer(KM ~ group + piece + fan + group_size + personal_relation + EC + AIMS + mus_stat_num + (1|Pt_ID), data = KM_indchar)
+```
+
+Check model
+```{r}
+#check_model(KM_full) # execute in console
+
+check_outliers(KM_full)
+
+check_outliers(KM_indchar$KM)
+
+summary(KM_full)
+
+r2(KM_full)
+
+model_dashboard(KM_full, output_file = "KamaMuta_dashboard.html")
+```
+
+#### Effect (parameter) estimates
+```{r}
+report_table(KM_full)
+
+mp_satt<-model_parameters(KM_full, ci_method = "satterthwaite", standardize = "refit")
+mp_satt # copy and paste into excel, convert text to table, copy into word to apply formatting. 
+```
+
+Check how this compares to bootstrapping
+```{r}
+mp_bs<-model_parameters(KM_full, bootstrap = TRUE, iterations = 500, verbose = FALSE)
+mp_bs
+
+mp_bs2<-model_parameters(KM_full, ci_method = "hdi", standardize = "refit", bootstrap = TRUE, iterations = 500, verbose = FALSE)
+mp_bs2
+```
+
+Estimate the effect of piece
+```{r}
+estimate_means(KM_full, at = "piece")
+
+estimate_contrasts(KM_full, contrast = "piece")
+
+```
+
+#### Visualize
+```{r}
+params<-parameters(KM_full, effects = "fixed")
+params
+
+labels = c( "Musical Proficiency",  "*Trait Absorption","Trait Empathy","*Relationship Musicians","Group Size", "Fan","*Piece [Folk]",  "*Piece [Schnittke]",  "Group [Livestreaming]")
+
+KM_param_plot<-plot(params) +
+  scale_y_discrete(labels = labels)+
+  scale_color_manual(values = rev(colours_DSQ))+
+  labs(title = "Kama Muta")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+## 3.3.3 Awe
+Organize data
+```{r}
+dat<-df.full%>%select(Pt_ID, group, contains("AWE_wonder"))
+
+df.long<-dat%>%pivot_longer(!c(group, Pt_ID), #make long
+                        names_to = c("question", "piece"),
+                        names_pattern ="(.*)_(.*)",
+                        values_to = "Awe")%>%select(-question)
+
+df.long$piece<-factor(df.long$piece, levels = c("Beethoven", "Schnittke", "Folk")) #factor for the correct facet order
+df.long_w_na = df.long[!complete.cases(df.long), ] # there are so many missing live audience values from awe scale here because 7 participants did not manage to open the page containing the awe scale and connectedness questions after the Schnittke. It was a page turning issue. 
+
+data<-df.long%>%drop_na() # removed NA so 408 observations became 370 observations.
+
+personal_chars<-df.full%>%select(Pt_ID, fan, EC, AIMS, musician_status, group_size, personal_relation)
+awe_indchar<-data%>%left_join(personal_chars, by = "Pt_ID")
+
+awe_indchar_w_na = awe_indchar[!complete.cases(awe_indchar), ]
+
+awe_indchar<-awe_indchar%>%drop_na() #370 to 347
+
+awe_indchar$Pt_ID<-factor(awe_indchar$Pt_ID)
+awe_indchar$mus_stat_num = as.numeric(awe_indchar$musician_status)
+
+awe_indchar%>%group_by(group, piece)%>%count()
+```
+
+Fit lme4 with all predictors
+```{r}
+AWE_full<-lmer(Awe ~ group + piece + fan + group_size + personal_relation + EC + AIMS + mus_stat_num + (1|Pt_ID), data = awe_indchar)
+```
+
+```{r}
+#check_model(AWE_full) # execute in console
+
+check_outliers(AWE_full)
+check_outliers(AWE_full, method = c("cook", "pareto"))
+check_outliers(awe_indchar$Awe,  method = "zscore_robust")
+
+summary(AWE_full)
+
+r2(AWE_full)
+
+model_dashboard(AWE_full, output_file = "Awe_dashboard.html")
+```
+#### Effect (parameter) estimates
+
+```{r}
+report_table(AWE_full)
+
+mp_satt<-model_parameters(AWE_full, ci_method = "satterthwaite", standardize = "refit")
+mp_satt # copy and paste into excel, convert text to table, copy into word to apply formatting. 
+```
+
+Check how this compares to bootstrapping
+```{r}
+mp_bs<-model_parameters(AWE_full, bootstrap = TRUE, iterations = 500, verbose = FALSE)
+mp_bs
+
+mp_bs2<-model_parameters(AWE_full, ci_method = "hdi", standardize = "refit", bootstrap = TRUE, iterations = 500, verbose = FALSE)
+mp_bs2
+```
+
+Estimate contrasts between pieces 
+```{r}
+estimate_means(AWE_full, at = "piece")
+
+estimate_contrasts(AWE_full, contrast = "piece")
+```
+
+#### Visualize
+
+```{r}
+awe_params<-parameters(AWE_full, effects = "fixed")
+awe_params
+
+labels = c( "Musical Proficiency",  "*Trait Absorption","Trait Empathy","Relationship Musicians","Group Size", "Fan","*Piece [Folk]",  "*Piece [Schnittke]",  "Group [Livestreaming]")
+
+AWE_param_plot<-plot(awe_params) +
+  scale_y_discrete(labels = labels)+
+  scale_color_manual(values = rev(colours_DSQ))+
+  labs(title = "Awe")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+plot_grid(
+  KM_param_plot, AWE_param_plot,
+  labels = "AUTO", ncol = 2
+)
+
+graphname<-paste0("../plots/dot_whisker_awe_km.jpg")
+
+ggsave(graphname, width = 22, height = 10, units = 'cm', dpi = 500)
+```
+
+## 3.3.4 Language influence on feeling moved (bevæget) and touched (rørt)
+
+*Visualize*
+Feeling moved across pieces
+
+```{r}
+moved_touched<-df.full%>%select(Pt_ID, group, language,
+                                contains("moved"), contains("touched"),
+                                contains("KM"), contains("chills"))%>%
+  select(-(contains("others")), -(contains("untouched")), -(contains("noTouched")),-emotionally_moved_Bach)
+
+moved_touched_long<-moved_touched%>%pivot_longer(!c(Pt_ID, group, language),
+                        names_to = c("question", "piece"),
+                        names_pattern ="(.*)_(.*)",
+                        values_to = "response")  
+
+moved_touched_long$piece<-factor(moved_touched_long$piece, levels = c("Beethoven", "Schnittke", "Folk"))
+
+moved_touched_long$question<-factor(moved_touched_long$question, levels = c("moved", "touched","chills", "KM"), labels = c("Moved", "Touched","Chills", "Kama Muta"))
+
+
+c<-moved_touched%>%
+  group_by(group)%>%
+  count()
+
+Subtitle = paste0("Live = ", c$n[c$group =="Live"], ";Virtual = ", c$n[c$group =="Virtual"])
+
+moved_touched_long%>%
+  ggplot(aes(fill = group,x = piece, y = response))+
+  geom_boxplot()+
+  geom_jitter()+
+  labs(title="Moved/Touched",
+       subtitle = Subtitle)+
+  theme_DSQ()+
+  xlab("Piece")+
+  ylab("Response")+
+  theme(axis.text.x = element_text(angle = 30))+
+  theme(legend.position = "none")+
+  facet_grid(rows = vars(language), cols = vars(question))+
+  theme(strip.text.x = element_text(size = 12), strip.text.y = element_text(size = 12))
+```
+
+Do chills relate more to feeling touched than moved? (maybe only relevant for Danish audience)?
+
+No chills and moved have a higher correspondence so this does not relate well/is not a good explanation for the findings from Seibt et al. (2017)
+```{r}
+moved_touched_wide<-moved_touched_long%>%pivot_wider(names_from = question, values_from = response)
+
+rmc_moved_touched<-moved_touched_wide%>%filter(language =="Danish")%>%
+  rmcorr_mat(participant = Pt_ID,
+                              variables = c("Moved", "Touched", "Chills"))
+
+require(corrplot)
+corrplot(rmc_moved_touched$matrix)
+
+rmc_moved_touched
+```
+
+
+```{r}
+moved_touched_long%>%
+  ggplot(aes(color = Pt_ID,x = question, y = response, group = Pt_ID))+
+  geom_line(alpha = 0.2)+
+  labs(title="Moved across pieces by language",
+       subtitle = Subtitle)+
+  theme_DSQ()+
+  xlab("Piece")+
+  ylab("Response")+
+  theme(axis.text.x = element_text(angle = 30))+
+  theme(legend.position = "none")+
+  facet_grid(language ~ piece)+
+  theme(strip.text.x = element_text(size = 12), strip.text.y = element_text(size = 12))
+
+graphname = "../plots/Moved_Piece_language_line.jpg"
+ggsave(graphname, 
+       width = 20, 
+       height = 20, 
+       units = 'cm', 
+       dpi = 500)
+
+```
+
+**Organize data**
+```{r}
+data<-moved_touched_long%>%drop_na() # removed NA so 816 observations became 737 observations
+
+data$Pt_ID<-as.factor(data$Pt_ID)
+```
+
+*Summarize*
+```{r}
+data%>%
+  group_by(group, question, piece)%>%
+  get_summary_stats(response, type = "mean_sd")
+
+bxp <- ggboxplot(
+  data, x = "group", y = "response",
+  color = "piece", palette = "jco",
+  facet.by = "question", short.panel.labs = FALSE
+  )
+bxp
+```
+**Check assumptions for parametric testing**
+*outliers*
+3 outliers in kama muta only, none extreme. No outliers in Moved or Touched.
+```{r}
+data %>%
+  group_by(question, group, piece) %>%
+  identify_outliers(response)
+
+# check only moved/touched because I am not sure if it IDs IQR based on the full data or just the question
+data %>%
+  filter(question == "Moved")%>%
+  group_by(group, piece) %>%
+  identify_outliers(response)
+
+data %>%
+  filter(question == "Touched")%>%
+  group_by(group, piece) %>%
+  identify_outliers(response)
+
+```
+
+*normality assumption*
+all violated therefore it may not be appropriate to run a mixed anova here and instead you need a test that is not dependent on the normality assumption
+```{r}
+data%>%
+group_by(question, group, piece) %>%
+  shapiro_test(response)
+```
+
+*QQplot*
+At high sample sizes such as our own, the shapiro test is easily violated. It also could be violated because this is interval rather than continuous data.
+```{r}
+data%>%
+  filter(question == "Moved")%>%
+  ggqqplot("response", ggtheme = theme_bw()) +
+    facet_grid(question + group ~ piece, labeller = "label_both")
+# looks pretty bad because it is likert scale data
+
+data%>%
+  filter(question == "Touched")%>%
+  ggqqplot("response", ggtheme = theme_bw()) +
+    facet_grid(question + group ~ piece, labeller = "label_both")
+```
+
+*homogeneity of variance assumption*
+none violated
+```{r}
+data%>%
+group_by(question, piece) %>%
+  levene_test(response ~ group)
+```
+#### Aligned Ranks Transformation ANOVA
+"ART ANOVA is a nonparametric approach that allows multiple independent variables, and repeated measures" - https://rcompanion.org/handbook/F_16.html
+
+There were significantly more Danish people in the live audience and significantly more English people in the livestreaming audience therefore group does not make sense as a predictor here. Piece effects on kama muta have already been reported therefore I will only examine the effects and interaction of question and language.
+```{r}
+# fit model for only Moved and Touched
+data_moved_language_model<-data%>%filter(question %in% c("Moved", "Touched"))
+data_moved_language_model%>%group_by(question, language)%>%summarize(count = n())
+
+# need to represent this repeated measure of question because piece is not represented in the model
+data_moved_language_model$question2<-data_moved_language_model$question
+
+# random slope
+moved_language_model_piece = art(response ~ piece*question*language + (1|Pt_ID), data = data_moved_language_model)
+anova(moved_language_model_piece)
+
+# random slope
+moved_language_model_rs = art(response ~ question*language + (1+question2|Pt_ID), data = data_moved_language_model)
+anova(moved_language_model_rs)
+```
+
+```{r}
+lang_quest_marginal_piece = art.con(moved_language_model_piece, "question:language", adjust = "Bonferroni")
+lang_quest_marginal_piece # how do the df look here? Accurate? Except that this paired t-test must be flawed because it should actually be a comparison across 3 groups. 
+
+# Post-hoc comparisons: interaction Question and Language
+lang_quest_marginal = art.con(moved_language_model_rs, "question:language", adjust = "Bonferroni")
+lang_quest_marginal
+```
+#### Visualize
+```{r}
+data_moved_language_model_wider<-data_moved_language_model%>%pivot_wider(names_from = question, values_from = response)
+
+vis.dat<-data_moved_language_model_wider%>%group_by(group, language, piece, Moved, Touched)%>%summarise(count = n())%>%ungroup()%>%mutate(ID = row_number())
+
+vis.dat.long<-vis.dat%>%pivot_longer(!c(ID, group, language, piece, count),
+                        names_to = "question",values_to = "response")
+
+colours_DSQ<-c("#2d769a","#b34036")
+Title= "Moved across pieces by language"
+Pts<-data_moved_language_model_wider%>%group_by(Pt_ID, group, language)%>%summarize()%>%ungroup()
+Subtitle = paste0("Live: ", Pts%>%filter(group == "Live")%>%count(), ", Livestreaming: ", Pts%>%filter(group == "Virtual")%>%count(),", Danish: ", Pts%>%filter(language =="Danish")%>%count(), ", English: ", Pts%>%filter(language == "English")%>%count())
+
+vis.dat.long%>%
+  ggplot(aes(x = question, y = response, group = ID,linewidth = count, color = group))+
+  geom_line(alpha = 0.4)+
+  labs(title=Title, 
+       subtitle = Subtitle)+
+  theme_minimal()+
+  scale_color_manual(values = colours_DSQ, name = "Concert Group")+
+  xlab("Piece")+
+  ylab("Response")+
+  theme(axis.text.x = element_text(angle = 30))+
+  theme(legend.position = "none")+
+  facet_grid(language ~ piece)+
+  theme(strip.text.x = element_text(size = 12), strip.text.y = element_text(size = 12, angle = 0))
+
+graphname = "../plots/Moved_Piece_Language_Lineweight.jpg"
+ggsave(graphname, width = 20, height = 15, units = 'cm', dpi = 500)
+
+```
+
+
+# 3.4 Motion and Emotion
+
+## 3.4.1 mQoM
+
+**Organize the data**
+```{r}
+dat<-df.full%>%select(Pt_ID, group, contains("mQoM"), contains("connected"), contains("KM"), contains("AWE_wonder"))
+
+df.long<-dat%>%pivot_longer(!c(group, Pt_ID), #make long
+                        names_to = c("question", "piece"),
+                        names_pattern ="(.*)_(.*)",
+                        values_to = "response")
+
+df.wide<-df.long%>%pivot_wider(names_from = question, values_from = response)
+
+df.wide<-df.wide%>%filter(piece %in% c("Beethoven", "Schnittke", "Folk"))
+
+data<-df.wide%>%select(-connected_audience_attending, -connected_audience_streaming)
+
+data$piece<-factor(data$piece, levels = c("Beethoven", "Schnittke", "Folk"))
+
+# **Examine sample size and drop NA**
+data%>%group_by(Pt_ID)%>%summarise(n=n()) # 110 participants; without dropping NA: 136
+data%>%group_by(group, piece)%>%summarise(n=n()) # without dropping NA: LIVE: 91, virtual: 45
+data%>%drop_na()%>%group_by(group, piece)%>%summarise(n=n()) # Live = 72-81, Virtual = 16-25; without dropping NA: LIVE: 91, virtual: 45
+
+# keep for reference
+data_with_na<-data 
+
+#Later you need to drop the NA anyways so you could consider doing it here to maintain consistency.
+data_nona<-data%>%drop_na() #408 to 287
+data<-data_nona
+```
+```{r}
+mQoM_full<-lmer(mQoM ~ group + piece + group:piece + # concert
+                  connected_musicians + connected_audience + KM + AWE_wonder + # emotions
+                  connected_musicians:piece + connected_audience:piece + KM:piece + AWE_wonder:piece + # piece interactions
+                  (1|Pt_ID),
+                data = data)
+```
+
+```{r}
+#check_model(mQoM_full)
+```
+
+Log transform
+
+```{r}
+data$log_mQoM<-log(data$mQoM) # fewer outliers identified with log transformation
+```
+
+```{r}
+log_mQoM_full<-lmer(log_mQoM ~ group + piece + group:piece +# concert
+                  connected_musicians + connected_audience + KM + AWE_wonder + # emotions
+                  connected_musicians:piece + connected_audience:piece + KM:piece + AWE_wonder:piece + # piece interactions
+                  (1|Pt_ID),
+                data = data)
+```
+
+```{r}
+#check_model(log_mQoM_full)
+```
+
+Remove the influential case 261
+```{r}
+data_u_ol<-data%>%dplyr::slice(-261L)
+```
+
+```{r}
+# ID outliers
+outliers<-data_u_ol %>%
+  group_by(group, piece) %>%
+  identify_outliers(log_mQoM)
+
+outliers # 9 instances with log transformed data (compared to 17 with the normal data)
+
+data_u_ol2<-data_u_ol%>% # 277 to 259
+  group_by(group, piece) %>%
+  filter(!is_outlier(log_mQoM))%>%
+  ungroup()
+
+data_u_ol2%>%group_by(group, piece)%>%summarise(n=n()) 
+```
+
+```{r}
+log_mQoM_full_u_ol<-lmer(log_mQoM ~ group + piece + group:piece + # concert
+                  connected_musicians + connected_audience + KM + AWE_wonder + # emotions
+                  piece:connected_musicians + piece:connected_audience + piece:KM + piece:AWE_wonder + # piece interactions
+                  (1|Pt_ID),
+                data = data_u_ol2)
+```
+
+```{r}
+#check_model(log_mQoM_full_u_ol)
+check_heteroscedasticity(log_mQoM_full_u_ol) # yes heteroscedasticity is there.
+model_dashboard(log_mQoM_full_u_ol, output_file = "QoM_dashboard.html")
+
+r2(log_mQoM_full_u_ol)
+```
+High VIF in the check model output may be acceptable because they are related to the interactions:
+
+"2. The high VIFs are caused by the inclusion of powers or products of other variables. If you specify a regression model with both x and x2, there’s a good chance that those two variables will be highly correlated. Similarly, if your model has x, z, and xz, both x and z are likely to be highly correlated with their product. This is not something to be concerned about, however, because the p-value for xz is not affected by the multicollinearity.  This is easily demonstrated: you can greatly reduce the correlations by “centering” the variables (i.e., subtracting their means) before creating the powers or the products. But the p-value for x2 or for xz will be exactly the same, regardless of whether or not you center. And all the results for the other variables (including the R2 but not including the lower-order terms) will be the same in either case. So the multicollinearity has no adverse consequences." - https://statisticalhorizons.com/multicollinearity/
+
+### Parameter estimates
+```{r}
+report_table(log_mQoM_full_u_ol) 
+
+mp_satt<-model_parameters(log_mQoM_full_u_ol, ci_method = "satterthwaite", standardize = "refit")
+mp_satt # copy and paste into excel, convert text to table, copy into word to apply formatting. 
+```
+
+Check how this compares to bootstrapping
+```{r}
+mp_bs<-model_parameters(log_mQoM_full_u_ol, ci_method = "hdi", standardize = "refit", bootstrap = TRUE, iterations = 500, verbose = FALSE)
+mp_bs
+```
+
+Examine the interaction between piee and group
+```{r}
+estimate_means(log_mQoM_full_u_ol, at = "piece")
+
+estimate_contrasts(log_mQoM_full_u_ol, contrast = "piece", at = "group")
+estimate_contrasts(log_mQoM_full_u_ol, contrast = "group", at = "piece")
+```
+
+Estimate the awe x piece interaction
+```{r}
+slopes<-estimate_slopes(log_mQoM_full_u_ol, at = "piece", trend = "AWE_wonder")
+slopes
+```
+
+### Visualize
+
+Interaction between awe and piece
+
+```{r}
+# piece x awe
+awe_plot<-plot(slopes)+
+  labs(x = "Awe", y = "Log Mean QoM", title = "Interaction of Piece and Awe on Motion")+theme_minimal()
+
+awe_plot
+```
+```{r}
+piece_x_awe_grid<-get_datagrid(log_mQoM_full_u_ol, at = c("piece","AWE_wonder"))
+
+piece_x_awe_audience_relation<-estimate_relation(log_mQoM_full_u_ol, data = piece_x_awe_grid)
+
+vis<-visualisation_recipe(piece_x_awe_audience_relation, show_data = "point", point = list(alpha = .5, position = position_jitter(width = .2)))
+
+trend_plot_awe<-plot(vis)+
+  labs(title = "Interaction of Piece and Awe on Motion",
+       x = "Awe", 
+       y = "Log Mean QoM")+
+  theme_minimal()+
+  theme(legend.title = element_blank())
+
+graphname<-paste0("../plots/qom_piece_awe.jpg")
+ggsave(graphname, width = 15, height = 9, units = 'cm', dpi = 500)
+```
+
+```{r}
+# piece x group
+pg_grid<-get_datagrid(log_mQoM_full_u_ol, at = c("piece","group"))
+
+expected<-estimate_expectation(log_mQoM_full_u_ol, data = pg_grid)
+
+colours_DSQ<-c("#2d769a","#b34036")
+
+piece_group_qom_plot<-plot(expected)+
+  labs(x = "Piece", y = "Log Mean QoM", title = "Interaction of Piece and Group on Motion")+
+  scale_color_manual(values = colours_DSQ, name = "Group")+theme_minimal()
+piece_group_qom_plot
+```
+
+```{r}
+plot_grid(piece_group_qom_plot, trend_plot_awe, labels = c('A', 'B'), label_size = 12)
+
+graphname<-paste0("../plots/Effect_Awe_piecegroup_QoM.jpg")
+ggsave(graphname, width = 20, height = 9, units = 'cm', dpi = 500)
+```
+
+## 3.4.2 Stilling
+**Organize the data**
+```{r}
+dat<-df.full%>%select(Pt_ID, group, contains("Stilling"), contains("connected"), contains("KM"), contains("AWE_wonder"))
+
+df.long<-dat%>%pivot_longer(!c(group, Pt_ID), #make long
+                        names_to = c("question", "piece"),
+                        names_pattern ="(.*)_(.*)",
+                        values_to = "response")
+
+df.long$piece<-factor(df.long$piece, levels = c("Beethoven", "Schnittke","Bach", "Folk", "FullConcert")) #factor for the correct facet order
+
+df.wide<-df.long%>%pivot_wider(names_from = question, values_from = response)
+
+df.wide<-df.wide%>%filter(piece %in% c("Beethoven", "Schnittke", "Folk"))%>%filter(group == "Live") # removes Bach and virtual audiences
+
+still<-df.wide%>%select(-connected_audience_attending, -connected_audience_streaming)%>%drop_na() #remove unnecessary cls and missing data
+```
+
+```{r}
+still_full<-lmer(Stilling ~ piece + # concert
+                  connected_musicians + connected_audience + KM + AWE_wonder + # emotions
+                   piece:connected_musicians + piece:connected_audience + piece:KM + piece:AWE_wonder + # piece interactions
+                  (1|Pt_ID),
+                data = still)
+```
+
+No influential cases 
+```{r}
+#check_model(still_full)
+```
+
+```{r}
+# ID outliers
+outliers<-still %>%
+  group_by(group, piece) %>%
+  identify_outliers(Stilling)
+
+outliers # 4
+
+still_u_ol<-still%>% # 277 to 259
+  group_by(group, piece) %>%
+  filter(!is_outlier(Stilling))%>%
+  ungroup()
+
+still_u_ol%>%group_by(group, piece)%>%summarise(n=n()) 
+```
+
+```{r}
+still_full2<-lmer(Stilling ~ piece + # concert
+                  connected_musicians + connected_audience + KM + AWE_wonder + # emotions
+                   piece:connected_musicians + piece:connected_audience + piece:KM + piece:AWE_wonder + # piece interactions
+                  (1|Pt_ID),
+                data = still_u_ol)
+```
+
+```{r}
+#check_model(still_full2) # linearity looks like it could also be violated. The QQ only looks poor at the very ends. 
+check_heteroscedasticity(still_full2) # yes heteroscedasticity is there.
+model_dashboard(still_full2, output_file = "Stilling_dashboard.html")
+summary(still_full2)
+r2(still_full2)
+```
+### Parameter estimates
+```{r}
+mp_satt<-model_parameters(still_full2, ci_method = "satterthwaite", standardize = "refit")
+mp_satt # copy and paste into excel, convert text to table, copy into word to apply formatting. 
+```
+
+Given that Satterthwaite approximation could be incorrect, check how this compares to bootstrapping
+```{r}
+mp_bs<-model_parameters(still_full2, bootstrap = TRUE, iterations = 500, verbose = FALSE)
+mp_bs
+
+mp_bs2<-model_parameters(still_full2, ci_method = "hdi", standardize = "refit", bootstrap = TRUE, iterations = 500, verbose = FALSE)
+mp_bs2
+```
+
+Examine the interaction between connectedness to the musicians and piece on stilling
+
+```{r}
+slopes<-estimate_slopes(still_full2, at = "piece", trend = "connected_musicians")
+slopes
+
+contrasts<-estimate_contrasts(still_full2, at = "piece", contrast = "connected_musicians")
+contrasts
+
+means<-estimate_means(still_full2, at = "piece", fixed = "connected_musicians")
+means
+```
+### Visualize
+
+Main effect of connected audience on stilling: would not plot without the reduced model.
+```{r}
+connAud_still<-lmer(Stilling ~ connected_audience + (1|Pt_ID), data = still_u_ol)
+
+connAud_grid<-get_datagrid(connAud_still, at = "connected_audience")
+
+expected<-estimate_expectation(connAud_still, data = connAud_grid)
+
+connAud_plot<-plot(visualisation_recipe(expected, show_data = "point", point = list(alpha = .5, position = position_jitter(width = .2))))+labs(x = "Connected to the Audience", y = "Stilling", title = "Effect of Connectedness to the Audience \non Stilling")+theme_minimal()
+
+connAud_plot
+
+graphname<-paste0("../plots/EffectConnAud_Stilling.jpg")
+ggsave(graphname, width = 12, height = 7, units = 'cm', dpi = 500)
+```
+
+
+Interaction between connected to the musicians and piece
+
+```{r}
+# piece x con_mus
+connmus_plot<-plot(slopes)+
+  labs(x = "Connected Musicians", y = "Stilling", title = "Interaction of Piece and Connectedness to the Musicians on Stilling")+theme_minimal()
+
+connmus_plot
+```
+
+```{r}
+piece_x_connected_musicians_grid<-get_datagrid(still_full2, at = c("piece","connected_musicians"))
+
+piece_x_connected_musicians_relation<-estimate_relation(still_full2, data = piece_x_connected_musicians_grid)
+
+vis<-visualisation_recipe(piece_x_connected_musicians_relation, show_data = "point", point = list(alpha = .5, position = position_jitter(width = .2)))
+
+ixn_piece_conmus_still<-plot(vis)+
+  labs(title = "Effect of Piece and Connectedness to the \nMusicians on Stilling",
+       x = "Connectedness to the Musicians", 
+       y = "Stilling")+
+  theme_minimal()+
+  theme(legend.title = element_blank())
+
+graphname<-paste0("../plots/still_piece_connMus.jpg")
+ggsave(graphname, width = 15, height = 9, units = 'cm', dpi = 500)
+```
+
+```{r}
+plot_grid(connAud_plot, ixn_piece_conmus_still, labels = c('A', 'B'), label_size = 12)
+
+graphname<-paste0("../plots/Stilling_Connected_Plots.jpg")
+ggsave(graphname, width = 20, height = 9, units = 'cm', dpi = 500)
+```
+
+## 3.4.3 Neighbours' motion
+
+```{r}
+dat<-df.full%>%select(Pt_ID, group, contains('Motion_seen'), contains("connected"), contains("KM"), contains("AWE_wonder"))
+
+df.long<-dat%>%pivot_longer(!c(group, Pt_ID), #make long
+                        names_to = c("question", "piece"),
+                        names_pattern ="(.*)_(.*)",
+                        values_to = "response")
+
+df.long$piece<-factor(df.long$piece, levels = c("Beethoven", "Schnittke","Bach", "Folk", "FullConcert")) #factor for the correct facet order
+
+df.wide<-df.long%>%pivot_wider(names_from = question, values_from = response)
+
+df.wide<-df.wide%>%filter(piece %in% c("Beethoven", "Schnittke", "Folk"))%>%filter(group == "Live") # removes Bach and virtual audiences
+
+data<-df.wide%>%select(-connected_audience_attending, -connected_audience_streaming)%>%drop_na() #remove unnecessary cols and missing data
+
+#rename 
+data%<>%rename("seen" = "Motion_seen",
+              "seen_max" = "Motion_seen_Max")
+
+seen<-data
+```
+
+```{r}
+seen_full<-lmer(seen ~ piece + # concert
+                  connected_musicians + connected_audience + KM + AWE_wonder + # emotions
+                   piece:connected_musicians + piece:connected_audience + piece:KM + piece:AWE_wonder + # piece interactions
+                  (1|Pt_ID),
+                data = seen)
+```
+
+```{r}
+#check_model(seen_full) # looks bad at the tail
+
+check_outliers(seen_full)
+```
+```{r}
+# ID outliers
+outliers<-seen %>%
+  group_by(group, piece) %>%
+  identify_outliers(seen)
+
+outliers # 8
+
+seen_u_ol<-seen%>% # 277 to 259
+  group_by(group, piece) %>%
+  filter(!is_outlier(seen))%>%
+  ungroup()
+
+seen_u_ol%>%group_by(group, piece)%>%summarise(n=n())
+```
+
+```{r}
+seen_full2<-lmer(seen ~ piece + # concert
+                  connected_musicians + connected_audience + KM + AWE_wonder + # emotions
+                   piece:connected_musicians + piece:connected_audience + piece:KM + piece:AWE_wonder + # piece interactions
+                  (1|Pt_ID),
+                data = seen_u_ol)
+```
+
+```{r}
+#check_model(seen_full2) # this looks worse than mQoM to me
+check_heteroscedasticity(seen_full2) # yes heteroscedasticity is there.
+model_dashboard(seen_full2, output_file = "MotionSeen_dashboard.html")
+report_table(seen_full2) 
+summary(seen_full2)
+r2(seen_full2)
+```
+### Parameter estimates
+
+```{r}
+std_seen_u_ol<-standardize(seen_u_ol)
+std_seen_full2<-lmer(seen ~ piece + # concert
+                  connected_musicians + connected_audience + KM + AWE_wonder + # emotions
+                   piece:connected_musicians + piece:connected_audience + piece:KM + piece:AWE_wonder + # piece interactions
+                  (1|Pt_ID),
+                data = std_seen_u_ol)
+
+mp_satt<-model_parameters(std_seen_full2, ci_method = "satterthwaite")
+mp_satt
+```
+Check how this compares to bootstrapping
+```{r}
+mp_bs<-model_parameters(seen_full2, bootstrap = TRUE, iterations = 500, verbose = FALSE)
+mp_bs
+
+mp_bs2<-model_parameters(seen_full2, ci_method = "hdi", standardize = "refit", bootstrap = TRUE, iterations = 500, verbose = FALSE)
+mp_bs2
+```
+Estimate contrasts between pieces 
+
+```{r}
+estimate_means(seen_full2, at = "piece")
+
+estimate_contrasts(seen_full2, contrast = "piece")
+```
+
+Examine interaction between piece and connected audience
+
+```{r}
+slopes<-estimate_slopes(std_seen_full2, at = "piece", trend = "connected_audience")
+slopes
+```
+
+### Visualize
+```{r}
+piece_x_connected_audience_grid<-get_datagrid(seen_full2, at = c("piece","connected_audience"))
+
+piece_x_connected_audience_relation<-estimate_relation(seen_full2, data = piece_x_connected_audience_grid)
+
+vis<-visualisation_recipe(piece_x_connected_audience_relation, show_data = "point", point = list(alpha = .5, position = position_jitter(width = .2)))
+
+plot(vis)+
+  labs(title = "Interaction of Piece and Connectedness to the \nAudience on Motion Seen",
+       x = "Connectedness to the Audience", 
+       y = "Motion Seen")+
+  theme_minimal()+
+  theme(legend.title = element_blank())
+
+graphname<-paste0("../plots/seen_piece_connAud_facet.jpg")
+ggsave(graphname, width = 15, height = 9, units = 'cm', dpi = 500)
+```
+
+```{r}
+connAud_x_piece<-lmer(seen ~ connected_audience * piece + (1|Pt_ID), data = seen)
+
+piece_x_connected_audience_relation<-estimate_relation(connAud_x_piece) 
+
+vis<-visualisation_recipe(piece_x_connected_audience_relation, show_data = "point", point = list(alpha = .5, position = position_jitter(width = .2)))
+
+plot(vis)+
+  labs(title = "Interaction of Piece and Connectedness to the \nAudience on Motion Seen",
+       x = "Connectedness to the Audience", 
+       y = "Motion Seen")+
+  theme_minimal()+
+  theme(legend.title = element_blank())
+
+graphname<-paste0("../plots/seen_piece_connAud.jpg")
+ggsave(graphname, width = 15, height = 9, units = 'cm', dpi = 500)
+```
+## 3.5 Relations Between Concert emotions
+Make Repeated Measures Correlation Chart to examine the relations between the outcome variables of interest
+
+```{r}
+cormat_df<-df.full%>%select(Pt_ID,contains("KM"), contains("AWE_wonder"), contains("connected_musicians"), contains("connected_audience"), contains("familiar"),contains("enjoy"), contains("positive"), contains("negative"), contains("tense"), contains("relaxed"), contains("others_moved"))
+
+cormat_df.long<-cormat_df%>%pivot_longer(!Pt_ID,
+                        names_to = c("var", "piece"),
+                        names_pattern ="(.*)_(.*)",
+                        values_to = "response")
+
+exclude<-c("connected_audience_streaming", "connected_audience_attending","positively_transformed", "negatively_transformed", "emotionally_moved") # emotionally_moved is the question from Bach
+
+cormat_df.long<-cormat_df.long%>%filter(! var %in% exclude)
+
+cormat_df.wide<-pivot_wider(cormat_df.long, names_from = var, values_from = response)
+
+# rename the vars so they appear pretty in the chart
+variables<-c("Kama Muta","Awe", "Connected Musicians*", "Connected Audience*","Familiar*","Enjoyment*","Positive Feelings*", "Negative Feelings*", "Tense*", "Relaxed*", "Others Moved*")
+colnames(cormat_df.wide)<-c("Pt_ID", "piece", variables)
+
+rmc_mat<-rmcorr_mat(Pt_ID, variables, cormat_df.wide, CI.level = 0.95)
+
+rmcorrlist<-rmc_mat$summary
+rmcorrlist$p.val.adj<-p.adjust(rmcorrlist$p.vals, method = "fdr", n = length(rmcorrlist$p.vals))
+rmcorrlist$rmcorr.r<-round(rmcorrlist$rmcorr.r, 2)
+
+rmcorrlist%<>%filter(p.val.adj < .05)
+
+rmcorrlist%<>%mutate(sig = case_when(p.val.adj>.01 ~ "*",
+                                p.val.adj>.001 ~ "**", 
+                                p.val.adj<.001 ~ "***"))
+
+#Arrange to make it look pretty
+rmcorrlist$measure1%<>%factor(levels = c("Kama Muta", "Awe", "Connected Musicians*","Connected Audience*","Familiar*","Enjoyment*","Others Moved*", "Positive Feelings*", "Relaxed*", "Negative Feelings*", "Tense*"))
+rmcorrlist$measure2%<>%factor(levels = c("Kama Muta", "Awe", "Connected Musicians*","Connected Audience*","Familiar*","Enjoyment*","Others Moved*", "Positive Feelings*", "Relaxed*", "Negative Feelings*", "Tense*"))
+
+#rmcorrlist$measure2%<>%factor(levels = c("Awe", "Connected Musicians","Connected Audience", "Familiar", "Enjoyment"))
+
+rmcorrlist%<>%rename("r" = "rmcorr.r")
+
+colours_DSQ_cor<-c("#2d769a", "white","#b34036")
+Title = "Concert Experience"
+Subtitle = "RM Correlations (FDR Adjusted)"
+
+con_exp_cc<-ggplot(rmcorrlist, aes(x = measure2,y = measure1, fill = r))+
+  geom_tile(color = "white")+
+  scale_fill_gradientn(
+    colours = colours_DSQ_cor,
+    limits = c(-1,1),
+    name = substitute(paste(italic(r))))+
+  theme_minimal()+ 
+  theme(axis.text.x = element_text(vjust = 1, hjust = 1, angle = 45))+
+  labs(title = Title,
+       subtitle = Subtitle)+
+  coord_fixed()+
+  geom_text(aes(measure2, measure1, label = paste(sig, r, sep ="\n")), color = "black", size = 3)+ 
+  theme(axis.title.x = element_blank(),
+        axis.title.y = element_blank())
+
+con_exp_cc
+
+graphname<-paste0("../plots/CC_RM_Corr_large.jpg")
+ggsave(graphname, width = 15, height = 15, units = 'cm', dpi = 500)
+```
+### 3.5.1 Others Moved
+We asked participants “To what extent do you believe audience members around you were moved?” 7-point Likert scale from 0 = Not at all to 6 = A lot. This is what is captured in the others_moved measures in df.full. 
+
+Note: this measure was collected in the exact same way from the livestreaming audience, however neighbours_ values cannot be calculated so the following analyses are only conducted on the live audience.
+
+To understand if they could actually detect whether those around them were moved, we averaged responses on the item of "moved" from the participants who were their neighbours: left, right and the two directly in front of them. These are the same participants who were incorporated into the measure of motion_seen.
+
+This value was calculated in a private script to avoid revealing audience member seat positions. 
+
+#### RMCORR 
+1) others moved
+2) oneself feeling moved
+3) others' reports of how moved they were actually
+4) others' reports of KM
+5) Motion seen
+6) QoM
+
+Did people actually detect if people were feeling moved?
+Or was it only based on whether they felt moved themselves?
+How could they detect this--was it based on movement?
+
+Feeling moved and belief in others being moved around you were correlated with repeated measures correlations. 
+
+```{r}
+df_moved_othersMoved<-df.full%>%select(Pt_ID,group, contains("moved"), contains("KM"), contains("Neighbours"), contains("mQoM"), contains("Motion_seen"))%>%select(!contains("Bach"))%>%filter(group == "Live")
+
+df_moved_othersMoved.long<-df_moved_othersMoved%>%pivot_longer(!c(Pt_ID, group),
+                        names_to = c("question", "piece"),
+                        names_pattern ="(.*)_(.*)",
+                        values_to = "response")
+
+df_moved_othersMoved.wide<-df_moved_othersMoved.long%>%pivot_wider(names_from = question, values_from = response)
+
+moved_othersmoved.rmc<-rmcorr_mat(participant = "Pt_ID", variables = c("moved", "others_moved", "KM", "Neighbours_EmoMove", "Neighbours_KamaMuta","mQoM", "Motion_seen", "Motion_seen_Max"), dataset = df_moved_othersMoved.wide)
+
+
+moved_othersmoved.rmc$summary
+
+p.vals <- moved_othersmoved.rmc$summary$p.vals
+
+p.vals.fdr <- p.adjust(p.vals, 
+                              method = "fdr",
+                              n = length(p.vals))
+
+moved_othersmoved.rmc$summary<-cbind(moved_othersmoved.rmc$summary, p.vals.fdr)
+moved_othersmoved.rmc$summary
+
+require(corrplot)
+corrplot(moved_othersmoved.rmc$matrix)
+```
+
+There was a rm-correlation between participants reports of others feeling moved and their reports of themselves feeling moved, full audience: r = .37, p < .001; live audience: r = .42, p < .001 .
+
+There was no rm-correlation between participants reports of others feeling moved and their neighbours' actual reports of feeling moved, full audience: r = .03, p = .73, live audience: r = .05, p =.62, however there was a rm-correlation between their reports of kama muta and reports of others feeling moved in the live audience, full audience r = .11, p = .22, live audience only: r = .22, p = .01.
+
+How were they making the judgement?
+There was no rm-correlation between participants' reports of others feeling moved and the motion that they could see, full audience: r = .18, p = .047, *live audience*: r = .15, p = .12. However there was no correlation between participants' own motion and feeling moved, full audience: r = .08, p = .34, live audience: r = .08, p = .40. If you want to report the motion seen relation, you should check it in a model. When examining it in only the live audience, it does not exist. 
+
+The finding that there was a correlation between neighbours' reports of kama muta and their reports on those around them being moved requires further investigation to ensure that it is above and beyond the influence of musical piece. 
+
+#### LME4
+
+```{r}
+others_moved_data<-df_moved_othersMoved.wide%>%select(-mQoM, -contains("seen"))%>%drop_na()
+others_moved_w_na = others_moved_data[!complete.cases(others_moved_data), ]
+others_moved_data%>%group_by(group, piece)%>%count()
+```
+
+Standardize data and fit
+```{r}
+std_others_moved_data<-standardize(others_moved_data)
+
+std_neighbours_emo_moved<-lmer(Neighbours_EmoMove ~ piece + others_moved + others_moved:piece + moved + moved:piece + (1|Pt_ID), data = std_others_moved_data) 
+
+std_neighbours_KM<-lmer(Neighbours_KamaMuta ~ piece + others_moved + others_moved:piece + KM + KM:piece + (1|Pt_ID), data = std_others_moved_data) 
+```
+
+```{r}
+#check_model(std_neighbours_emo_moved) # execute in console
+check_outliers(std_neighbours_emo_moved)
+check_heteroscedasticity(std_neighbours_emo_moved) # no heteroscedasticity
+summary(std_neighbours_emo_moved)
+r2(std_neighbours_emo_moved)
+model_dashboard(std_neighbours_emo_moved, output_file = "NeighboursFeelingMoved_dashboard.html")
+```
+
+```{r}
+#check_model(std_neighbours_KM) # execute in console
+check_outliers(std_neighbours_KM)
+check_heteroscedasticity(std_neighbours_KM) # no heteroscedasticity
+summary(std_neighbours_KM)
+r2(std_neighbours_KM)
+model_dashboard(std_neighbours_KM, output_file = "NeighboursKamaMuta_dashboard.html")
+```
+
+#### Effect (parameter) estimates
+```{r}
+mp_satt<-model_parameters(std_neighbours_emo_moved, ci_method = "satterthwaite")
+mp_satt # copy and paste into excel, convert text to table, copy into word to apply formatting. 
+```
+```{r}
+mp_satt<-model_parameters(std_neighbours_KM, ci_method = "satterthwaite")
+mp_satt # copy and paste into excel, convert text to table, copy into word to apply formatting. 
+```
