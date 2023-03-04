@@ -50,7 +50,7 @@ Pt_ID has several codes that give different meaning.
 # Import Libraries
 
 ```{r libraries}
-packages = c("GPArotation","rmcorr", "cowplot", "ggpubr", "rstatix", "ltm","reshape2", "tidyverse", "psych", "nlme", "emmeans", "pastecs", "ordinal", "ggsignif", "ARTool", "multcomp", "easystats", "merDeriv", "ggeffects", "magrittr", "brms", "rstan", "StanHeaders", "lme4", "lmerTest") 
+packages = c("GPArotation","rmcorr", "cowplot", "ggpubr", "rstatix", "ltm","reshape2", "tidyverse", "psych", "nlme", "emmeans", "pastecs", "ordinal", "ggsignif", "ARTool", "multcomp", "easystats", "merDeriv", "ggeffects", "magrittr", "brms","marginaleffects", "rstan", "StanHeaders", "lme4", "lmerTest") 
 
 ## Now load or install&load all
 package.check <- lapply(
@@ -552,6 +552,8 @@ data<-df.long%>%drop_na() # removed NA so 816 observations became 726 observatio
 data$question<-as.factor(data$question)
 data$Pt_ID<-as.factor(data$Pt_ID)
 data$response.f<-factor(data$response, ordered = TRUE)
+
+simple_data<-data
 ```
 
 ```{r}
@@ -603,6 +605,61 @@ get_prior(bf(response.f ~
                   EC + AIMS + mus_stat_num + 
                   (1|Pt_ID)),
           data = std_sc_data)
+```
+Fit model with no variables collected pre- or post-concert to include more livestreaming participants in the analysis. We will not consider the influence of the individual characteristics but instead just the concert variables on connectedness. 
+
+```{r}
+std_sc_data_simple<-standardize(simple_data)
+
+simple_data%>%group_by(group, question,piece)%>%count()
+
+get_prior(bf(response.f ~ # concert chars
+                  piece * question * group +
+                  (1|Pt_ID)),
+          data = simple_data)
+
+# social connection 
+simple_sc_brm<-brm(
+  bf(response.f ~ # concert chars
+                  piece * question * group +
+                  (1|Pt_ID)), 
+  family = cumulative("probit"), 
+  data = simple_data, 
+  init = "0", 
+  prior = set_prior("normal(0, 1)", 
+                    coef = c("groupVirtual","pieceFolk","pieceFolk:groupVirtual","pieceFolk:questionconnected_musicians","pieceFolk:questionconnected_musicians:groupVirtual", "pieceSchnittke","pieceSchnittke:groupVirtual", "pieceSchnittke:questionconnected_musicians", "pieceSchnittke:questionconnected_musicians:groupVirtual", "questionconnected_musicians", "questionconnected_musicians:groupVirtual")),
+  chains = 6, # does this improve ESS?
+  save_pars = save_pars(all = TRUE))
+
+summary(simple_sc_brm)
+
+std_sc_simple_posterior_ciHDI<-describe_posterior(
+  simple_sc_brm,
+  component = "all",
+  test = c("p_direction", "p_significance", "rope"),
+  centrality = "all",
+  ci_method = "HDI",
+  ci = .95
+)
+std_sc_simple_posterior_ciHDI
+```
+
+Visualize simple
+```{r}
+cfx_fitted_simple<-conditional_effects(simple_sc_brm, effects = "question:group", method = "fitted") 
+
+colours_DSQ<-c("#2d769a","#b34036")
+ixn_group_target<-plot(cfx_fitted_simple, theme = theme_minimal(), plot = FALSE)[[1]]+
+  labs(x = "Target", y = "Connectedness", title = "Interaction between Target and Group")+
+  scale_color_manual(values = colours_DSQ, name = "Group", labels = c("Live", "Livestreaming"))+
+  scale_fill_manual(values = colours_DSQ,name = "Group", labels = c("Live", "Livestreaming"))+
+  scale_x_discrete(labels=c("Audience", "Musicians"))
+
+ixn_group_target
+
+graphname<-paste0("../plots/conditional_fx_sc_target_group_simple.jpg")
+
+ggsave(graphname, width = 15, height = 10, units = 'cm', dpi = 500)
 ```
 
 Fit model on standardized data
@@ -672,7 +729,7 @@ std_sc_posterior_ciHDI<-describe_posterior(
 std_sc_posterior_ciHDI
 ```
 
-"However, simulation studies data suggest that using the percentage of the full posterior distribution, instead of a CI, might be more sensitive (especially do delineate highly significant effects). Thus, we recommend that the user considers using the full ROPE percentage (by setting ci = 1), which will return the portion of the entire posterior distribution in the ROPE."
+"However, simulation studies data suggest that using the percentage of the full posterior distribution, instead of a CI, might be more sensitive (especially to delineate highly significant effects). Thus, we recommend that the user considers using the full ROPE percentage (by setting ci = 1), which will return the portion of the entire posterior distribution in the ROPE."
 
 ```{r}
 percentage_in_rope <- rope(std_sc_full_brm_priorN01, ci = 1, data = std_sc_data)
@@ -717,6 +774,9 @@ contr_groupXquestion
 contr_questionXgroup
 slope_fan
 ```
+```{r}
+plot(std_sc_full_brm_priorN01)
+```
 
 #### Visualize
 ```{r}
@@ -738,6 +798,52 @@ graphname<-paste0("../plots/dot_whisker_sc.jpg")
 
 ggsave(graphname, width = 15, height = 10, units = 'cm', dpi = 500)
 ```
+```{r}
+cfx_fitted_fan<-conditional_effects(std_sc_full_brm_priorN01, effects = "fan:question")#, method = "fitted") 
+
+colours_target<-c("#227368","#a68202")
+ixn_fan_target<-plot(cfx_fitted_fan, theme = theme_minimal(), plot = FALSE)[[1]]+
+  labs(x = "Fanship", y = "Connectedness", title = "Interaction between Target and Fanship")+
+  scale_color_manual(values = colours_target, name = "Target", labels = c("Audience", "Musicians"))+
+  scale_fill_manual(values = colours_target,name = "Target", labels = c("Audience", "Musicians"))+
+  aes(linetype=question)+
+  scale_linetype_manual(values = c("solid", "dotdash"), name = "Target", labels = c("Audience", "Musicians"))
+
+ixn_fan_target
+
+graphname<-paste0("../plots/conditional_fx_sc_target_fan.jpg")
+
+ggsave(graphname, width = 15, height = 10, units = 'cm', dpi = 500)
+```
+
+```{r}
+cfx_fitted<-conditional_effects(std_sc_full_brm_priorN01, effects = "question:group", method = "fitted") 
+
+colours_DSQ<-c("#2d769a","#b34036")
+ixn_group_target<-plot(cfx_fitted, theme = theme_minimal(), plot = FALSE)[[1]]+
+  labs(x = "Target", y = "Connectedness", title = "Interaction between Target and Group")+
+  scale_color_manual(values = colours_DSQ, name = "Group", labels = c("Live", "Livestreaming"))+
+  scale_fill_manual(values = colours_DSQ,name = "Group", labels = c("Live", "Livestreaming"))+
+  scale_x_discrete(labels=c("Audience", "Musicians"))
+
+ixn_group_target
+
+graphname<-paste0("../plots/conditional_fx_sc_target_group.jpg")
+
+ggsave(graphname, width = 15, height = 10, units = 'cm', dpi = 500)
+```
+
+```{r}
+plot_grid(
+  ixn_group_target, ixn_fan_target,
+  labels = "AUTO", ncol = 2
+)
+
+graphname<-paste0("../plots/sc_plotgrid.jpg")
+
+ggsave(graphname, width = 22, height = 10, units = 'cm', dpi = 500)
+```
+
 
 ## 3.3.2 Kama Muta
 Organize data
@@ -1076,7 +1182,7 @@ data%>%
 group_by(question, piece) %>%
   levene_test(response ~ group)
 ```
-#### Aligned Ranks Transformation ANOVA
+### Aligned Ranks Transformation ANOVA
 "ART ANOVA is a nonparametric approach that allows multiple independent variables, and repeated measures" - https://rcompanion.org/handbook/F_16.html
 
 There were significantly more Danish people in the live audience and significantly more English people in the livestreaming audience therefore group does not make sense as a predictor here. Piece effects on kama muta have already been reported therefore I will only examine the effects and interaction of question and language.
@@ -1105,7 +1211,7 @@ lang_quest_marginal_piece # how do the df look here? Accurate? Except that this 
 lang_quest_marginal = art.con(moved_language_model_rs, "question:language", adjust = "Bonferroni")
 lang_quest_marginal
 ```
-#### Visualize
+### Visualize
 ```{r}
 data_moved_language_model_wider<-data_moved_language_model%>%pivot_wider(names_from = question, values_from = response)
 
@@ -1138,6 +1244,95 @@ ggsave(graphname, width = 20, height = 15, units = 'cm', dpi = 500)
 
 ```
 
+## 3.3.5 Arousal and Valence of the Pieces
+Vuoskoski & Eerola, 2011 Valence / Arousal Scale: arousal dimension adapted with tension dimension from Schimmack & Grobb, 2000
+```{r}
+arousal_valence<-df.full%>%select(Pt_ID, group, contains("positive"), contains("negative"), contains("tense"), contains("relaxed"))%>%select(-contains("transformed"))
+
+arousal_valence_long<-arousal_valence%>%pivot_longer(!c(group, Pt_ID), #make long
+                        names_to = c("question", "piece"),
+                        names_pattern ="(.*)_(.*)",
+                        values_to = "response")
+
+arousal_valence_wide<-arousal_valence_long%>%pivot_wider(names_from = question, values_from = response)
+
+summary(arousal_valence_wide)
+```
+
+
+
+
+### Test
+Nonparametric test: 
+Note: the degrees of freedom are correct as both ART and ART-C are intended for use with repeated measures (within subject) designs as well.https://arxiv.org/pdf/2102.11824.pdf
+```{r}
+arousal_valence_long_nona<-arousal_valence_long%>%drop_na()
+# random intercept
+emotions_piece_group_model = art(response ~ piece*question*group + (1|Pt_ID), data = arousal_valence_long_nona)
+anova(emotions_piece_group_model)
+
+# Post-hoc comparisons: interaction Question and Language
+emotions_piece_model = art(response ~ piece*question + (1|Pt_ID), data = arousal_valence_long_nona)
+anova(emotions_piece_model)
+emotions_piece_marginal = art.con(emotions_piece_model, "piece:question", adjust = "Bonferroni")
+emotions_piece_marginal
+
+# Degrees-of-freedom method: kenward-roger 
+# P value adjustment: bonferroni method for 66 tests 
+# contrast                                estimate   SE   df t.ratio p.value
+
+#                Negative
+# Beethoven,Negative - Folk,Negative         135.3 33.5 1324   4.041  0.0037
+# Beethoven,Negative - Schnittke,Negative   -139.3 33.4 1325  -4.168  0.0022
+# Folk,Negative - Schnittke,Negative        -274.6 33.9 1322  -8.104  <.0001
+
+#                Positive
+# Beethoven,Positive - Folk,Positive         -49.0 33.4 1323  -1.469  1.0000
+# Beethoven,Positive - Schnittke,Positive    197.4 33.4 1323   5.905  <.0001
+# Folk,Positive - Schnittke,Positive         246.4 34.0 1324   7.241  <.0001
+
+#                Relaxed
+# Beethoven,Relaxed - Folk,Relaxed           -47.9 34.6 1335  -1.386  1.0000
+# Beethoven,Relaxed - Schnittke,Relaxed      221.8 34.3 1334   6.463  <.0001
+# Folk,Relaxed - Schnittke,Relaxed           269.8 36.0 1323   7.484  <.0001
+
+#                Tense
+# Beethoven,Tense - Folk,Tense               152.8 33.4 1323   4.572  0.0003
+# Beethoven,Tense - Schnittke,Tense         -172.3 33.1 1322  -5.198  <.0001
+# Folk,Tense - Schnittke,Tense              -325.1 33.8 1322  -9.614  <.0001
+```
+
+### Visualize
+```{r}
+colours_piece<-c("#F6BE00", "#B65FCF", "#45B08C")
+
+arousal_valence_long%<>%  mutate(piece = factor(piece, levels = c("Beethoven", "Schnittke", "Folk")),
+         question = factor(question, levels = c("positive", "negative", "relaxed", "tense"), labels =  c("Positive", "Negative", "Relaxed", "Tense")))
+
+arousal_valence_long%>%
+  ggplot(aes(x = question, y = response, fill = piece))+
+  geom_boxplot()+
+  theme_minimal()+
+  scale_fill_manual(values = colours_piece)+
+  labs(x = "Emotion", y = "Response", title = "Emotional Responses to Pieces")
+  #facet_grid(rows = vars(group))
+
+arousal_valence_long%>%drop_na()%>%group_by(question, piece)%>%
+  summarise(mean = mean(response), 
+            se = sd(response)/sqrt(n()))%>%
+  ggplot(aes(x = question, y = mean, group = piece, color = piece, linetype = piece))+
+    geom_line() +
+    geom_point()+
+    geom_errorbar(aes(ymin=mean-se, ymax=mean+se), width=.2,
+                   position=position_dodge(0.05))+
+    theme_minimal()+
+    labs(title = "Differences in emotions across pieces", x = "Emotion", y = "Response")+
+    scale_colour_manual(name = "Piece",values = colours_piece)+
+    scale_linetype_manual(name = "Piece", values = c("solid", "longdash", "dotdash"))
+
+graphname = "../plots/Emotions_Piece.jpg"
+ggsave(graphname, width = 10, height = 8, units = 'cm', dpi = 500)
+```
 
 # 3.4 Motion and Emotion
 
@@ -1281,8 +1476,9 @@ awe_plot<-plot(slopes)+
 
 awe_plot
 ```
+
 ```{r}
-piece_x_awe_grid<-get_datagrid(log_mQoM_full_u_ol, at = c("piece","AWE_wonder"))
+piece_x_awe_grid<-get_datagrid(log_mQoM_full_u_ol, at = c("AWE_wonder", "piece"))
 
 piece_x_awe_audience_relation<-estimate_relation(log_mQoM_full_u_ol, data = piece_x_awe_grid)
 
@@ -1293,7 +1489,11 @@ trend_plot_awe<-plot(vis)+
        x = "Awe", 
        y = "Log Mean QoM")+
   theme_minimal()+
-  theme(legend.title = element_blank())
+  theme(legend.title = element_blank())+
+  scale_fill_manual(values = colours_piece)+
+  scale_colour_manual(values = colours_piece)
+
+trend_plot_awe
 
 graphname<-paste0("../plots/qom_piece_awe.jpg")
 ggsave(graphname, width = 15, height = 9, units = 'cm', dpi = 500)
@@ -1440,20 +1640,51 @@ connmus_plot
 ```
 
 ```{r}
-piece_x_connected_musicians_grid<-get_datagrid(still_full2, at = c("piece","connected_musicians"))
+piece_x_connected_musicians_grid<-get_datagrid(still_full2, at = c("connected_musicians", "piece"))
 
 piece_x_connected_musicians_relation<-estimate_relation(still_full2, data = piece_x_connected_musicians_grid)
 
 vis<-visualisation_recipe(piece_x_connected_musicians_relation, show_data = "point", point = list(alpha = .5, position = position_jitter(width = .2)))
 
 ixn_piece_conmus_still<-plot(vis)+
-  labs(title = "Effect of Piece and Connectedness to the \nMusicians on Stilling",
-       x = "Connectedness to the Musicians", 
+  labs(title = "Interaction of Piece and Connectedness to \nMusicians on Stilling",
+       x = "Connected to the Musicians", 
        y = "Stilling")+
   theme_minimal()+
-  theme(legend.title = element_blank())
+  theme(legend.title = element_blank())+
+  scale_fill_manual(values = colours_piece)+
+  scale_colour_manual(values = colours_piece)
+
+ixn_piece_conmus_still
 
 graphname<-paste0("../plots/still_piece_connMus.jpg")
+ggsave(graphname, width = 15, height = 9, units = 'cm', dpi = 500)
+```
+
+Try plotting connectedness to the musicians effect on stilling alone. Doing so in the model actually reverses the effect in folk...
+```{r}
+conn_mus_still<-lmer(Stilling ~ connected_musicians*piece + # concert
+                  #connected_musicians + # emotions
+                   #connected_musicians:piece + # piece interactions
+                  (1|Pt_ID),
+                data = still_u_ol)
+
+piece_x_connected_musicians_relation_only<-estimate_relation(conn_mus_still)
+
+vis<-visualisation_recipe(piece_x_connected_musicians_relation_only, show_data = "point", point = list(alpha = .5, position = position_jitter(width = .2)))
+
+ixn_piece_conmus_only_still<-plot(vis)+
+  labs(title = "Interaction of Piece and Connectedness to \nMusicians on Stilling",
+       x = "Connected to the Musicians", 
+       y = "Stilling")+
+  theme_minimal()+
+  theme(legend.title = element_blank())+
+  scale_fill_manual(values = colours_piece)+
+  scale_colour_manual(values = colours_piece)
+
+ixn_piece_conmus_only_still
+
+graphname<-paste0("../plots/still_piece_connMus_only.jpg")
 ggsave(graphname, width = 15, height = 9, units = 'cm', dpi = 500)
 ```
 
@@ -1596,12 +1827,16 @@ piece_x_connected_audience_relation<-estimate_relation(connAud_x_piece)
 
 vis<-visualisation_recipe(piece_x_connected_audience_relation, show_data = "point", point = list(alpha = .5, position = position_jitter(width = .2)))
 
+colours_piece<-c("#F6BE00", "#B65FCF", "#45B08C")
+
 plot(vis)+
   labs(title = "Interaction of Piece and Connectedness to the \nAudience on Motion Seen",
        x = "Connectedness to the Audience", 
        y = "Motion Seen")+
   theme_minimal()+
-  theme(legend.title = element_blank())
+  theme(legend.title = element_blank())+
+  scale_fill_manual(values = colours_piece)+
+  scale_colour_manual(values = colours_piece)
 
 graphname<-paste0("../plots/seen_piece_connAud.jpg")
 ggsave(graphname, width = 15, height = 9, units = 'cm', dpi = 500)
